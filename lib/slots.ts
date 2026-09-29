@@ -22,13 +22,16 @@ export type SlotInfo = {
   time: string;
   endTime: string;
   status: SlotStatus;
+  /** ISO time when hold expires (only for status=held) */
+  holdExpiresAt?: string;
+  /** session that holds the slot */
+  holdSessionId?: string;
 };
 
 const HOLD_MINUTES = 10;
 const MAX_DAYS_AHEAD = 30;
 const TZ = "Europe/Riga";
 
-/** Current date/time parts in Europe/Riga */
 export function nowInRiga(): { dateStr: string; timeStr: string; date: Date } {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,
@@ -45,7 +48,6 @@ export function nowInRiga(): { dateStr: string; timeStr: string; date: Date } {
   const dateStr = `${parts.year}-${parts.month}-${parts.day}`;
   const hour = parts.hour === "24" ? "00" : parts.hour;
   const timeStr = `${hour}:${parts.minute}`;
-  // UTC noon for that calendar day (stable for DATE columns)
   const date = new Date(`${dateStr}T12:00:00.000Z`);
   return { dateStr, timeStr, date };
 }
@@ -100,7 +102,7 @@ export async function getSlotsForDate(dateStr: string): Promise<{
     }),
     prisma.slotHold.findMany({
       where: { date, expiresAt: { gt: new Date() } },
-      select: { startTime: true },
+      select: { startTime: true, expiresAt: true, sessionId: true },
     }),
     prisma.blockedSlot.findMany({
       where: { date },
@@ -122,11 +124,18 @@ export async function getSlotsForDate(dateStr: string): Promise<{
   }
 
   const busy = new Set(bookings.map((b) => b.startTime));
-  const held = new Set(holds.map((h) => h.startTime));
+  const holdByTime = new Map(
+    holds.map((h) => [
+      h.startTime,
+      { expiresAt: h.expiresAt.toISOString(), sessionId: h.sessionId },
+    ])
+  );
   const blockedSet = new Set(blocked.map((b) => b.startTime));
 
   const slots: SlotInfo[] = SLOT_TIMES.map((time) => {
     let status: SlotStatus = "free";
+    let holdExpiresAt: string | undefined;
+    let holdSessionId: string | undefined;
 
     if (dateStr === today && time <= nowTime) {
       status = "past";
@@ -134,11 +143,20 @@ export async function getSlotsForDate(dateStr: string): Promise<{
       status = "busy";
     } else if (blockedSet.has(time)) {
       status = "blocked";
-    } else if (held.has(time)) {
+    } else if (holdByTime.has(time)) {
       status = "held";
+      const h = holdByTime.get(time)!;
+      holdExpiresAt = h.expiresAt;
+      holdSessionId = h.sessionId;
     }
 
-    return { time, endTime: endTimeOf(time), status };
+    return {
+      time,
+      endTime: endTimeOf(time),
+      status,
+      holdExpiresAt,
+      holdSessionId,
+    };
   });
 
   return { date: dateStr, closed: false, closedName: null, slots };
@@ -163,7 +181,6 @@ export async function createHold(params: {
 
   const slot = info.slots.find((s) => s.time === startTime);
   if (!slot || slot.status !== "free") {
-    // Allow re-hold if this session already holds it
     const existing = await prisma.slotHold.findFirst({
       where: {
         date: parseDateOnly(dateStr),
@@ -181,13 +198,11 @@ export async function createHold(params: {
   const date = parseDateOnly(dateStr);
   const expiresAt = new Date(Date.now() + HOLD_MINUTES * 60 * 1000);
 
-  // Release other holds by this session first
   await prisma.slotHold.deleteMany({
     where: { sessionId, NOT: { date, startTime } },
   });
 
   try {
-    // Clean expired holds on this slot
     await prisma.slotHold.deleteMany({
       where: { date, startTime, expiresAt: { lte: new Date() } },
     });
@@ -217,7 +232,11 @@ export async function createHold(params: {
   }
 }
 
-export async function releaseHold(sessionId: string, dateStr?: string, startTime?: string) {
+export async function releaseHold(
+  sessionId: string,
+  dateStr?: string,
+  startTime?: string
+) {
   if (dateStr && startTime) {
     await prisma.slotHold.deleteMany({
       where: {
@@ -231,7 +250,6 @@ export async function releaseHold(sessionId: string, dateStr?: string, startTime
   }
 }
 
-/** Remove expired holds (call occasionally) */
 export async function cleanupExpiredHolds() {
   await prisma.slotHold.deleteMany({
     where: { expiresAt: { lte: new Date() } },

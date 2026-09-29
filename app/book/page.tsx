@@ -9,6 +9,8 @@ type SlotInfo = {
   time: string;
   endTime: string;
   status: SlotStatus;
+  holdExpiresAt?: string;
+  holdSessionId?: string;
 };
 
 type SlotsResponse = {
@@ -84,10 +86,20 @@ function formatPrice(cents: number): string {
   return (cents / 100).toFixed(0) + " €";
 }
 
+/** Remaining hold time as mm:ss */
+function formatRemain(expiresAtIso: string, nowMs: number): string {
+  const ms = new Date(expiresAtIso).getTime() - nowMs;
+  if (ms <= 0) return "0:00";
+  const totalSec = Math.ceil(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 const statusLabel: Record<SlotStatus, string> = {
   free: "Свободно",
   busy: "Занято",
-  held: "Временно недоступно",
+  held: "Бронируют",
   blocked: "Недоступно",
   past: "Прошло",
   closed: "Выходной",
@@ -117,8 +129,9 @@ const btnBase: React.CSSProperties = {
 
 export default function BookPage() {
   const [step, setStep] = useState<Step>("datetime");
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [sessionId, setSessionId] = useState("");
 
-  // datetime
   const [today, setToday] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [slots, setSlots] = useState<SlotInfo[]>([]);
@@ -129,22 +142,28 @@ export default function BookPage() {
   const [holding, setHolding] = useState(false);
   const [held, setHeld] = useState<{ date: string; time: string; expiresAt: string } | null>(null);
 
-  // car
   const [brands, setBrands] = useState<Brand[]>([]);
   const [selectedBrandId, setSelectedBrandId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<Model | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
 
-  // service
   const [mainServices, setMainServices] = useState<ServiceItem[]>([]);
   const [extras, setExtras] = useState<ServiceItem[]>([]);
   const [selectedMainId, setSelectedMainId] = useState<string | null>(null);
   const [selectedExtraIds, setSelectedExtraIds] = useState<string[]>([]);
   const [servicesLoading, setServicesLoading] = useState(false);
 
+  useEffect(() => {
+    setSessionId(getSessionId());
+  }, []);
+
+  // tick every second for countdown
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const loadSlots = useCallback(async (date: string) => {
-    setLoading(true);
-    setError(null);
     try {
       const res = await fetch(`/api/slots?date=${date}`);
       const data: SlotsResponse = await res.json();
@@ -179,6 +198,21 @@ export default function BookPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // refresh slots every 15s while on datetime step (see holds expire)
+  useEffect(() => {
+    if (step !== "datetime" || !selectedDate) return;
+    const t = setInterval(() => loadSlots(selectedDate), 15000);
+    return () => clearInterval(t);
+  }, [step, selectedDate, loadSlots]);
+
+  // if my hold expired, clear local held state
+  useEffect(() => {
+    if (held && new Date(held.expiresAt).getTime() <= nowMs) {
+      setHeld(null);
+      if (selectedDate) loadSlots(selectedDate);
+    }
+  }, [held, nowMs, selectedDate, loadSlots]);
+
   const dateOptions = useMemo(() => {
     if (!today) return [];
     const list: string[] = [];
@@ -188,14 +222,14 @@ export default function BookPage() {
 
   async function onSelectSlot(time: string) {
     if (holding) return;
-    const sessionId = getSessionId();
+    const sid = getSessionId();
     setHolding(true);
     setError(null);
     try {
       const res = await fetch("/api/slots/hold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: selectedDate, time, sessionId }),
+        body: JSON.stringify({ date: selectedDate, time, sessionId: sid }),
       });
       const data = await res.json();
       if (!data.ok) {
@@ -206,7 +240,6 @@ export default function BookPage() {
       setHeld({ date: selectedDate, time, expiresAt: data.expiresAt });
       await loadSlots(selectedDate);
 
-      // load catalog and go to car step
       setCatalogLoading(true);
       const catRes = await fetch("/api/catalog");
       const catData = await catRes.json();
@@ -261,6 +294,11 @@ export default function BookPage() {
     return t;
   }, [mainServices, extras, selectedMainId, selectedExtraIds]);
 
+  const myHoldRemain =
+    held && new Date(held.expiresAt).getTime() > nowMs
+      ? formatRemain(held.expiresAt, nowMs)
+      : null;
+
   const summaryBar =
     held && (
       <div
@@ -276,10 +314,20 @@ export default function BookPage() {
         {selectedModel && selectedBrand
           ? ` · ${selectedBrand.name} ${selectedModel.name}`
           : ""}
+        {myHoldRemain ? ` · осталось ${myHoldRemain}` : ""}
       </div>
     );
 
-  // ─── STEP: datetime ───
+  function slotRightLabel(slot: SlotInfo, isMine: boolean): string {
+    if (isMine) return "Выбрано";
+    if (slot.status === "held" && slot.holdExpiresAt) {
+      const remain = formatRemain(slot.holdExpiresAt, nowMs);
+      return `Бронируют · ${remain}`;
+    }
+    return statusLabel[slot.status];
+  }
+
+  // ─── datetime ───
   if (step === "datetime") {
     return (
       <main style={pageStyle}>
@@ -294,7 +342,10 @@ export default function BookPage() {
                 <button
                   key={d}
                   type="button"
-                  onClick={() => loadSlots(d)}
+                  onClick={() => {
+                    setLoading(true);
+                    loadSlots(d);
+                  }}
                   style={{
                     flex: "0 0 auto",
                     padding: "10px 14px",
@@ -315,7 +366,7 @@ export default function BookPage() {
 
         {error && <ErrorBox text={error} />}
 
-        {held && (
+        {held && myHoldRemain && (
           <div
             style={{
               padding: 14,
@@ -325,10 +376,14 @@ export default function BookPage() {
               fontSize: 14,
             }}
           >
-            <strong>Слот удержан 10 мин</strong>
+            <strong>Слот удержан · {myHoldRemain}</strong>
             <div style={{ marginTop: 4 }}>
               {formatDisplayDate(held.date)} · {held.time}
             </div>
+            <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+              Завершите запись до конца таймера, иначе время снова станет
+              свободным
+            </p>
           </div>
         )}
 
@@ -343,9 +398,15 @@ export default function BookPage() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {slots.map((slot) => {
-                const selectable = slot.status === "free" && !holding;
                 const isMine =
-                  held?.date === selectedDate && held?.time === slot.time;
+                  !!held &&
+                  held.date === selectedDate &&
+                  held.time === slot.time &&
+                  (!!slot.holdSessionId
+                    ? slot.holdSessionId === sessionId
+                    : true);
+                const selectable = slot.status === "free" && !holding;
+
                 return (
                   <button
                     key={slot.time}
@@ -354,29 +415,56 @@ export default function BookPage() {
                     onClick={() => selectable && onSelectSlot(slot.time)}
                     style={{
                       ...btnBase,
+                      flexDirection: "column",
+                      alignItems: "stretch",
+                      gap: 4,
                       border: isMine
                         ? "2px solid #16a34a"
-                        : "1px solid #38444d",
+                        : slot.status === "held"
+                          ? "1px solid #d9770666"
+                          : "1px solid #38444d",
                       background: isMine
                         ? "#14532d33"
                         : selectable
                           ? "#16202a"
                           : "#0f1419",
-                      color: selectable || isMine ? "#e7e9ea" : "#6b7280",
-                      opacity: selectable || isMine ? 1 : 0.7,
+                      color: selectable || isMine ? "#e7e9ea" : "#9ca3af",
+                      opacity: selectable || isMine || slot.status === "held" ? 1 : 0.75,
                     }}
                   >
-                    <span style={{ fontWeight: 600, fontSize: 16 }}>
-                      {slot.time}
-                    </span>
-                    <span
+                    <div
                       style={{
-                        fontSize: 13,
-                        color: isMine ? "#4ade80" : statusColor[slot.status],
+                        display: "flex",
+                        justifyContent: "space-between",
+                        width: "100%",
                       }}
                     >
-                      {isMine ? "Выбрано" : statusLabel[slot.status]}
-                    </span>
+                      <span style={{ fontWeight: 600, fontSize: 16 }}>
+                        {slot.time}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 13,
+                          color: isMine
+                            ? "#4ade80"
+                            : statusColor[slot.status],
+                        }}
+                      >
+                        {slotRightLabel(slot, isMine)}
+                      </span>
+                    </div>
+                    {slot.status === "held" && !isMine && (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          opacity: 0.65,
+                          textAlign: "left",
+                        }}
+                      >
+                        Кто-то оформляет запись. Если не подтвердит — слот
+                        освободится
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -387,7 +475,7 @@ export default function BookPage() {
     );
   }
 
-  // ─── STEP: car ───
+  // ─── car ───
   if (step === "car") {
     return (
       <main style={pageStyle}>
@@ -500,15 +588,10 @@ export default function BookPage() {
     );
   }
 
-  // ─── STEP: service ───
+  // ─── service ───
   return (
     <main style={pageStyle}>
-      <Header
-        title="Услуга"
-        onBack={() => {
-          setStep("car");
-        }}
-      />
+      <Header title="Услуга" onBack={() => setStep("car")} />
       {summaryBar}
       {error && <ErrorBox text={error} />}
 
@@ -628,13 +711,7 @@ const scrollRow: React.CSSProperties = {
   WebkitOverflowScrolling: "touch",
 };
 
-function Header({
-  title,
-  onBack,
-}: {
-  title: string;
-  onBack?: () => void;
-}) {
+function Header({ title, onBack }: { title: string; onBack?: () => void }) {
   return (
     <header style={{ display: "flex", alignItems: "center", gap: 12 }}>
       {onBack ? (
