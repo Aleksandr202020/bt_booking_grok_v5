@@ -1,0 +1,261 @@
+// BT Booking v5 — Prisma schema
+// Neon PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+// ─── Enums ───
+
+enum UserRole {
+  CLIENT
+  ADMIN
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+// ─── Auth / Users ───
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String   @unique
+  email     String?  @unique
+  password  String   // hashed
+  role      UserRole @default(CLIENT)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cars     Car[]
+  bookings Booking[]
+  holds    SlotHold[]
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+// ─── Car catalog ───
+
+model Brand {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  nameLv    String?
+  nameRu    String?
+  nameEn    String?
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  models Model[]
+
+  @@map("brands")
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  slug      String   @unique // e.g. light, suv, van, commercial
+  nameLv    String
+  nameRu    String
+  nameEn    String
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  models       Model[]
+  servicePrices ServicePrice[]
+
+  @@map("categories")
+}
+
+model Model {
+  id         String   @id @default(cuid())
+  brandId    String
+  categoryId String
+  name       String
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  brand    Brand    @relation(fields: [brandId], references: [id])
+  category Category @relation(fields: [categoryId], references: [id])
+  cars     Car[]
+
+  @@unique([brandId, name])
+  @@map("models")
+}
+
+// Client's vehicles
+model Car {
+  id        String   @id @default(cuid())
+  userId    String
+  modelId   String
+  plate     String?  // number plate optional
+  archived  Boolean  @default(false) // soft-delete if used in bookings
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id])
+  model    Model     @relation(fields: [modelId], references: [id])
+  bookings Booking[]
+
+  @@map("cars")
+}
+
+// ─── Services & prices ───
+
+model Service {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  nameLv      String
+  nameRu      String
+  nameEn      String
+  description String?
+  isExtra     Boolean  @default(false) // additional service
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  prices          ServicePrice[]
+  bookingServices BookingService[]
+
+  @@map("services")
+}
+
+model ServicePrice {
+  id         String   @id @default(cuid())
+  serviceId  String
+  categoryId String
+  priceCents Int      // store money as integer cents
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  service  Service  @relation(fields: [serviceId], references: [id])
+  category Category @relation(fields: [categoryId], references: [id])
+
+  @@unique([serviceId, categoryId])
+  @@map("service_prices")
+}
+
+// ─── Schedule: holds, blocks, holidays ───
+
+/// Temporary 10-minute hold on a slot
+model SlotHold {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date // calendar day Europe/Riga
+  startTime String   // "09:00", "10:00", ...
+  sessionId String   // anonymous session or user id
+  userId    String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@unique([date, startTime])
+  @@index([expiresAt])
+  @@map("slot_holds")
+}
+
+model BlockedSlot {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date
+  startTime String
+  reason    String?
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([date, startTime])
+  @@map("blocked_slots")
+}
+
+model ClosedDay {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date @unique
+  name      String?  // e.g. "Jāņi"
+  createdAt DateTime @default(now())
+
+  @@map("closed_days")
+}
+
+// ─── Bookings ───
+
+model Booking {
+  id     String        @id @default(cuid())
+  userId String
+  carId  String
+
+  // Slot
+  date      DateTime @db.Date
+  startTime String   // "14:00"
+  endTime   String   // "15:00"
+  status    BookingStatus @default(CONFIRMED)
+
+  // Snapshot at confirmation time (immutable history)
+  carBrandName     String
+  carModelName     String
+  carCategoryName  String
+  carCategorySlug  String
+  totalPriceCents  Int
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User             @relation(fields: [userId], references: [id])
+  car      Car              @relation(fields: [carId], references: [id])
+  services BookingService[]
+
+  // One confirmed booking per slot
+  @@unique([date, startTime], name: "unique_confirmed_slot")
+  @@index([userId, date])
+  @@index([status, date])
+  @@map("bookings")
+}
+
+model BookingService {
+  id               String  @id @default(cuid())
+  bookingId        String
+  serviceId        String?
+  // Snapshot
+  serviceNameLv    String
+  serviceNameRu    String
+  serviceNameEn    String
+  isExtra          Boolean
+  priceCents       Int
+
+  booking Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  service Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@map("booking_services")
+}
+
+// ─── Audit ───
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String   // booking.create, booking.cancel, admin.override, ...
+  entityType String?
+  entityId   String?
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
