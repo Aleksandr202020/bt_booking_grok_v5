@@ -14,7 +14,7 @@ export default function HomePage() {
     >
       <h1 style={{ fontSize: "1.75rem", fontWeight: 700 }}>BT Booking v5</h1>
       <p style={{ opacity: 0.7, maxWidth: 360, lineHeight: 1.5 }}>
-        Online booking system for BT Automazgātava.
+        Online booking system for BT Automazg\u0101tava.
         <br />
         Next.js + Prisma + Neon + Vercel
       </p>
@@ -29,7 +29,12 @@ export default function HomePage() {
           fontWeight: 600,
         }}
       >
-        Setup OK — ready to build
+        Setup OK \u2014 ready to build
+      </p>
+      <p style={{ marginTop: 24, fontSize: "0.8rem", opacity: 0.5 }}>
+        <a href="/api/health" style={{ textDecoration: "underline" }}>
+          /api/health
+        </a>{" "}\u2014 database status
       </p>
     </main>
   );

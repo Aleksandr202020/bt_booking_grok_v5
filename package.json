@@ -10,6 +10,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
+    "db:seed": "npx tsx prisma/seed.ts",
+    "db:setup": "prisma db push && npx tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate"
   },
@@ -24,6 +26,10 @@
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "prisma": "^6.5.0",
+    "tsx": "^4.19.3",
     "typescript": "^5.8.2"
+  },
+  "prisma": {
+    "seed": "npx tsx prisma/seed.ts"
   }
 }
