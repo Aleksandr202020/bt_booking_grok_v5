@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 type SlotStatus = "free" | "busy" | "held" | "blocked" | "past" | "closed";
 
@@ -32,16 +33,19 @@ type Category = {
   nameEn: string;
 };
 
-type Model = {
+type MyCar = {
   id: string;
-  name: string;
+  plate: string | null;
+  brandName: string;
+  modelName: string;
+  modelId: string;
   category: Category;
 };
 
 type Brand = {
   id: string;
   name: string;
-  models: Model[];
+  models: { id: string; name: string; category: Category }[];
 };
 
 type ServiceItem = {
@@ -54,7 +58,7 @@ type ServiceItem = {
   priceCents: number;
 };
 
-type Step = "datetime" | "car" | "service";
+type Step = "datetime" | "auth" | "car" | "service";
 
 function getSessionId(): string {
   if (typeof window === "undefined") return "";
@@ -86,7 +90,6 @@ function formatPrice(cents: number): string {
   return (cents / 100).toFixed(0) + " €";
 }
 
-/** Remaining hold time as mm:ss */
 function formatRemain(expiresAtIso: string, nowMs: number): string {
   const ms = new Date(expiresAtIso).getTime() - nowMs;
   if (ms <= 0) return "0:00";
@@ -127,10 +130,14 @@ const btnBase: React.CSSProperties = {
   width: "100%",
 };
 
+const HOLD_KEY = "bt_active_hold";
+
 export default function BookPage() {
+  const router = useRouter();
   const [step, setStep] = useState<Step>("datetime");
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [sessionId, setSessionId] = useState("");
+  const [user, setUser] = useState<{ id: string; name: string } | null>(null);
 
   const [today, setToday] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
@@ -142,10 +149,15 @@ export default function BookPage() {
   const [holding, setHolding] = useState(false);
   const [held, setHeld] = useState<{ date: string; time: string; expiresAt: string } | null>(null);
 
+  // my cars
+  const [myCars, setMyCars] = useState<MyCar[]>([]);
+  const [selectedCar, setSelectedCar] = useState<MyCar | null>(null);
+  const [carsLoading, setCarsLoading] = useState(false);
+  const [addingCar, setAddingCar] = useState(false);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [selectedBrandId, setSelectedBrandId] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<Model | null>(null);
-  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [savingCar, setSavingCar] = useState(false);
 
   const [mainServices, setMainServices] = useState<ServiceItem[]>([]);
   const [extras, setExtras] = useState<ServiceItem[]>([]);
@@ -157,10 +169,33 @@ export default function BookPage() {
     setSessionId(getSessionId());
   }, []);
 
-  // tick every second for countdown
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // restore hold + check auth on mount
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(HOLD_KEY);
+      if (raw) {
+        const h = JSON.parse(raw) as { date: string; time: string; expiresAt: string };
+        if (new Date(h.expiresAt).getTime() > Date.now()) {
+          setHeld(h);
+        } else {
+          sessionStorage.removeItem(HOLD_KEY);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    fetch("/api/auth/me")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.ok && d.user) setUser(d.user);
+      })
+      .catch(() => {});
   }, []);
 
   const loadSlots = useCallback(async (date: string) => {
@@ -190,25 +225,22 @@ export default function BookPage() {
           setSlots(data.slots);
           setClosed(data.closed);
           setClosedName(data.closedName);
-        } else {
-          setError(data.error || "Error");
-        }
+        } else setError(data.error || "Error");
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
 
-  // refresh slots every 15s while on datetime step (see holds expire)
   useEffect(() => {
     if (step !== "datetime" || !selectedDate) return;
     const t = setInterval(() => loadSlots(selectedDate), 15000);
     return () => clearInterval(t);
   }, [step, selectedDate, loadSlots]);
 
-  // if my hold expired, clear local held state
   useEffect(() => {
     if (held && new Date(held.expiresAt).getTime() <= nowMs) {
       setHeld(null);
+      sessionStorage.removeItem(HOLD_KEY);
       if (selectedDate) loadSlots(selectedDate);
     }
   }, [held, nowMs, selectedDate, loadSlots]);
@@ -219,6 +251,26 @@ export default function BookPage() {
     for (let i = 0; i <= 30; i++) list.push(addDaysStr(today, i));
     return list;
   }, [today]);
+
+  async function loadMyCars() {
+    setCarsLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/cars");
+      const data = await res.json();
+      if (res.status === 401) {
+        setStep("auth");
+        return;
+      }
+      if (!data.ok) throw new Error(data.error);
+      setMyCars(data.cars);
+      setStep("car");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setCarsLoading(false);
+    }
+  }
 
   async function onSelectSlot(time: string) {
     if (holding) return;
@@ -237,15 +289,20 @@ export default function BookPage() {
         await loadSlots(selectedDate);
         return;
       }
-      setHeld({ date: selectedDate, time, expiresAt: data.expiresAt });
+      const h = { date: selectedDate, time, expiresAt: data.expiresAt as string };
+      setHeld(h);
+      sessionStorage.setItem(HOLD_KEY, JSON.stringify(h));
       await loadSlots(selectedDate);
 
-      setCatalogLoading(true);
-      const catRes = await fetch("/api/catalog");
-      const catData = await catRes.json();
-      if (catData.ok) setBrands(catData.brands);
-      setCatalogLoading(false);
-      setStep("car");
+      // check auth
+      const meRes = await fetch("/api/auth/me");
+      const me = await meRes.json();
+      if (me.ok && me.user) {
+        setUser(me.user);
+        await loadMyCars();
+      } else {
+        setStep("auth");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error");
     } finally {
@@ -253,15 +310,44 @@ export default function BookPage() {
     }
   }
 
-  const selectedBrand = brands.find((b) => b.id === selectedBrandId) ?? null;
+  async function startAddCar() {
+    setAddingCar(true);
+    setSelectedBrandId(null);
+    setSelectedModelId(null);
+    const res = await fetch("/api/catalog");
+    const data = await res.json();
+    if (data.ok) setBrands(data.brands);
+  }
+
+  async function saveNewCar() {
+    if (!selectedModelId) return;
+    setSavingCar(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/cars", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId: selectedModelId }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error);
+      setAddingCar(false);
+      setMyCars((prev) => [data.car, ...prev]);
+      setSelectedCar(data.car);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setSavingCar(false);
+    }
+  }
 
   async function goToService() {
-    if (!selectedModel) return;
+    if (!selectedCar) return;
     setServicesLoading(true);
     setError(null);
     try {
       const res = await fetch(
-        `/api/services?categoryId=${selectedModel.category.id}`
+        `/api/services?categoryId=${selectedCar.category.id}`
       );
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Failed to load services");
@@ -299,6 +385,8 @@ export default function BookPage() {
       ? formatRemain(held.expiresAt, nowMs)
       : null;
 
+  const selectedBrand = brands.find((b) => b.id === selectedBrandId);
+
   const summaryBar =
     held && (
       <div
@@ -311,18 +399,15 @@ export default function BookPage() {
         }}
       >
         {formatDisplayDate(held.date)} · {held.time}
-        {selectedModel && selectedBrand
-          ? ` · ${selectedBrand.name} ${selectedModel.name}`
-          : ""}
-        {myHoldRemain ? ` · осталось ${myHoldRemain}` : ""}
+        {selectedCar ? ` · ${selectedCar.brandName} ${selectedCar.modelName}` : ""}
+        {myHoldRemain ? ` · ${myHoldRemain}` : ""}
       </div>
     );
 
   function slotRightLabel(slot: SlotInfo, isMine: boolean): string {
     if (isMine) return "Выбрано";
     if (slot.status === "held" && slot.holdExpiresAt) {
-      const remain = formatRemain(slot.holdExpiresAt, nowMs);
-      return `Бронируют · ${remain}`;
+      return `Бронируют · ${formatRemain(slot.holdExpiresAt, nowMs)}`;
     }
     return statusLabel[slot.status];
   }
@@ -332,7 +417,6 @@ export default function BookPage() {
     return (
       <main style={pageStyle}>
         <Header title="Записаться" />
-
         <section>
           <Label>Дата</Label>
           <div style={scrollRow}>
@@ -367,23 +451,11 @@ export default function BookPage() {
         {error && <ErrorBox text={error} />}
 
         {held && myHoldRemain && (
-          <div
-            style={{
-              padding: 14,
-              borderRadius: 12,
-              background: "#14532d44",
-              border: "1px solid #16a34a",
-              fontSize: 14,
-            }}
-          >
+          <div style={holdBox}>
             <strong>Слот удержан · {myHoldRemain}</strong>
             <div style={{ marginTop: 4 }}>
               {formatDisplayDate(held.date)} · {held.time}
             </div>
-            <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-              Завершите запись до конца таймера, иначе время снова станет
-              свободным
-            </p>
           </div>
         )}
 
@@ -392,7 +464,6 @@ export default function BookPage() {
             {selectedDate ? formatDisplayDate(selectedDate) : "Время"}
             {closed && closedName ? ` · ${closedName}` : ""}
           </Label>
-
           {loading ? (
             <p style={{ opacity: 0.5 }}>Загрузка…</p>
           ) : (
@@ -402,11 +473,8 @@ export default function BookPage() {
                   !!held &&
                   held.date === selectedDate &&
                   held.time === slot.time &&
-                  (!!slot.holdSessionId
-                    ? slot.holdSessionId === sessionId
-                    : true);
+                  (!slot.holdSessionId || slot.holdSessionId === sessionId);
                 const selectable = slot.status === "free" && !holding;
-
                 return (
                   <button
                     key={slot.time}
@@ -429,38 +497,21 @@ export default function BookPage() {
                           ? "#16202a"
                           : "#0f1419",
                       color: selectable || isMine ? "#e7e9ea" : "#9ca3af",
-                      opacity: selectable || isMine || slot.status === "held" ? 1 : 0.75,
                     }}
                   >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        width: "100%",
-                      }}
-                    >
-                      <span style={{ fontWeight: 600, fontSize: 16 }}>
-                        {slot.time}
-                      </span>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ fontWeight: 600, fontSize: 16 }}>{slot.time}</span>
                       <span
                         style={{
                           fontSize: 13,
-                          color: isMine
-                            ? "#4ade80"
-                            : statusColor[slot.status],
+                          color: isMine ? "#4ade80" : statusColor[slot.status],
                         }}
                       >
                         {slotRightLabel(slot, isMine)}
                       </span>
                     </div>
                     {slot.status === "held" && !isMine && (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          opacity: 0.65,
-                          textAlign: "left",
-                        }}
-                      >
+                      <span style={{ fontSize: 11, opacity: 0.65 }}>
                         Кто-то оформляет запись. Если не подтвердит — слот
                         освободится
                       </span>
@@ -475,7 +526,29 @@ export default function BookPage() {
     );
   }
 
-  // ─── car ───
+  // ─── auth required ───
+  if (step === "auth") {
+    const next = encodeURIComponent("/book");
+    return (
+      <main style={pageStyle}>
+        <Header title="Вход" onBack={() => setStep("datetime")} />
+        {summaryBar}
+        <p style={{ lineHeight: 1.5, opacity: 0.85 }}>
+          Чтобы выбрать автомобиль и подтвердить запись, войдите или
+          зарегистрируйтесь. Слот удерживается ещё{" "}
+          <strong>{myHoldRemain || "…"}</strong>.
+        </p>
+        <Link href={`/login?next=${next}`} style={primaryBtnLink}>
+          Войти
+        </Link>
+        <Link href={`/register?next=${next}`} style={{ ...primaryBtnLink, background: "#38444d" }}>
+          Регистрация
+        </Link>
+      </main>
+    );
+  }
+
+  // ─── car: my cars ───
   if (step === "car") {
     return (
       <main style={pageStyle}>
@@ -483,106 +556,156 @@ export default function BookPage() {
           title="Автомобиль"
           onBack={() => {
             setStep("datetime");
-            setSelectedBrandId(null);
-            setSelectedModel(null);
+            setSelectedCar(null);
+            setAddingCar(false);
           }}
         />
         {summaryBar}
         {error && <ErrorBox text={error} />}
 
-        {catalogLoading ? (
-          <p style={{ opacity: 0.5 }}>Загрузка каталога…</p>
-        ) : !selectedBrandId ? (
-          <section>
-            <Label>Марка</Label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {brands.map((b) => (
+        {carsLoading ? (
+          <p style={{ opacity: 0.5 }}>Загрузка…</p>
+        ) : addingCar ? (
+          <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Label>Добавить автомобиль</Label>
+            {!selectedBrandId ? (
+              brands.map((b) => (
                 <button
                   key={b.id}
                   type="button"
                   onClick={() => setSelectedBrandId(b.id)}
                   style={btnBase}
                 >
-                  <span style={{ fontWeight: 600 }}>{b.name}</span>
-                  <span style={{ opacity: 0.5, fontSize: 13 }}>
-                    {b.models.length} мод.
-                  </span>
+                  {b.name}
                 </button>
-              ))}
-            </div>
-          </section>
-        ) : (
-          <section>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedBrandId(null);
-                setSelectedModel(null);
-              }}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#1d9bf0",
-                fontSize: 13,
-                marginBottom: 8,
-                padding: 0,
-              }}
-            >
-              ← {selectedBrand?.name}
-            </button>
-            <Label>Модель</Label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {selectedBrand?.models.map((m) => {
-                const active = selectedModel?.id === m.id;
-                return (
+              ))
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedBrandId(null);
+                    setSelectedModelId(null);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#1d9bf0",
+                    textAlign: "left",
+                    padding: 0,
+                  }}
+                >
+                  ← {selectedBrand?.name}
+                </button>
+                <Label>Модель</Label>
+                {selectedBrand?.models.map((m) => (
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => setSelectedModel(m)}
+                    onClick={() => setSelectedModelId(m.id)}
                     style={{
                       ...btnBase,
-                      border: active
-                        ? "2px solid #1d9bf0"
-                        : "1px solid #38444d",
-                      background: active ? "#1d9bf022" : "#16202a",
+                      border:
+                        selectedModelId === m.id
+                          ? "2px solid #1d9bf0"
+                          : "1px solid #38444d",
                     }}
                   >
-                    <span style={{ fontWeight: 600 }}>{m.name}</span>
-                    <span style={{ fontSize: 12, opacity: 0.65 }}>
+                    <span>{m.name}</span>
+                    <span style={{ fontSize: 12, opacity: 0.6 }}>
                       {m.category.nameRu}
                     </span>
                   </button>
-                );
-              })}
-            </div>
-
-            {selectedModel && (
-              <div style={{ marginTop: 16 }}>
-                <p style={{ fontSize: 13, opacity: 0.7, marginBottom: 12 }}>
-                  Категория: <strong>{selectedModel.category.nameRu}</strong>
-                  <br />
-                  (определяется автоматически)
-                </p>
+                ))}
                 <button
                   type="button"
-                  onClick={goToService}
-                  disabled={servicesLoading}
+                  disabled={!selectedModelId || savingCar}
+                  onClick={saveNewCar}
+                  style={primaryBtn}
+                >
+                  {savingCar ? "…" : "Сохранить и выбрать"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAddingCar(false)}
                   style={{
-                    width: "100%",
-                    padding: "14px",
-                    borderRadius: 12,
+                    background: "none",
                     border: "none",
-                    background: "#1d9bf0",
-                    color: "#fff",
-                    fontWeight: 600,
-                    fontSize: 16,
+                    color: "#9ca3af",
                   }}
                 >
-                  {servicesLoading ? "Загрузка…" : "Далее — услуга"}
+                  Отмена
                 </button>
-              </div>
+              </>
             )}
           </section>
+        ) : (
+          <>
+            <Label>Мои автомобили</Label>
+            {myCars.length === 0 ? (
+              <p style={{ opacity: 0.6, marginBottom: 12 }}>
+                Нет сохранённых авто — добавьте первое
+              </p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {myCars.map((c) => {
+                  const active = selectedCar?.id === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setSelectedCar(c)}
+                      style={{
+                        ...btnBase,
+                        border: active
+                          ? "2px solid #1d9bf0"
+                          : "1px solid #38444d",
+                        background: active ? "#1d9bf022" : "#16202a",
+                      }}
+                    >
+                      <span>
+                        <strong>
+                          {c.brandName} {c.modelName}
+                        </strong>
+                        <br />
+                        <span style={{ fontSize: 12, opacity: 0.65 }}>
+                          {c.category.nameRu}
+                        </span>
+                      </span>
+                      {active && (
+                        <span style={{ color: "#4ade80", fontSize: 13 }}>
+                          Выбрано
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={startAddCar}
+              style={{
+                ...primaryBtn,
+                background: "#38444d",
+                marginTop: 8,
+              }}
+            >
+              + Добавить автомобиль
+            </button>
+
+            {selectedCar && (
+              <button
+                type="button"
+                onClick={goToService}
+                disabled={servicesLoading}
+                style={{ ...primaryBtn, marginTop: 8 }}
+              >
+                {servicesLoading ? "Загрузка…" : "Далее — услуга"}
+              </button>
+            )}
+          </>
         )}
       </main>
     );
@@ -648,15 +771,7 @@ export default function BookPage() {
         </section>
       )}
 
-      <div
-        style={{
-          marginTop: 8,
-          padding: 16,
-          borderRadius: 12,
-          background: "#16202a",
-          border: "1px solid #38444d",
-        }}
-      >
+      <div style={totalBox}>
         <div
           style={{
             display: "flex",
@@ -670,22 +785,9 @@ export default function BookPage() {
           <span>{formatPrice(totalCents)}</span>
         </div>
         <p style={{ fontSize: 12, opacity: 0.55, marginBottom: 12 }}>
-          Подтверждение записи — следующий шаг (регистрация / вход)
+          Подтверждение записи — следующий шаг
         </p>
-        <button
-          type="button"
-          disabled
-          style={{
-            width: "100%",
-            padding: "14px",
-            borderRadius: 12,
-            border: "none",
-            background: "#38444d",
-            color: "#9ca3af",
-            fontWeight: 600,
-            fontSize: 16,
-          }}
-        >
+        <button type="button" disabled style={{ ...primaryBtn, background: "#38444d", color: "#9ca3af" }}>
           Подтвердить (скоро)
         </button>
       </div>
@@ -709,6 +811,40 @@ const scrollRow: React.CSSProperties = {
   overflowX: "auto",
   paddingBottom: 4,
   WebkitOverflowScrolling: "touch",
+};
+
+const holdBox: React.CSSProperties = {
+  padding: 14,
+  borderRadius: 12,
+  background: "#14532d44",
+  border: "1px solid #16a34a",
+  fontSize: 14,
+};
+
+const primaryBtn: React.CSSProperties = {
+  width: "100%",
+  padding: "14px",
+  borderRadius: 12,
+  border: "none",
+  background: "#1d9bf0",
+  color: "#fff",
+  fontWeight: 600,
+  fontSize: 16,
+};
+
+const primaryBtnLink: React.CSSProperties = {
+  ...primaryBtn,
+  display: "block",
+  textAlign: "center",
+  textDecoration: "none",
+};
+
+const totalBox: React.CSSProperties = {
+  marginTop: 8,
+  padding: 16,
+  borderRadius: 12,
+  background: "#16202a",
+  border: "1px solid #38444d",
 };
 
 function Header({ title, onBack }: { title: string; onBack?: () => void }) {
