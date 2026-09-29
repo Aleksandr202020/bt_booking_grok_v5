@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function HomePage() {
   return (
     <main
@@ -14,27 +16,26 @@ export default function HomePage() {
     >
       <h1 style={{ fontSize: "1.75rem", fontWeight: 700 }}>BT Booking v5</h1>
       <p style={{ opacity: 0.7, maxWidth: 360, lineHeight: 1.5 }}>
-        Online booking system for BT Automazg\u0101tava.
-        <br />
-        Next.js + Prisma + Neon + Vercel
+        Online booking for BT Automazg\u0101tava
       </p>
-      <p
+      <Link
+        href="/book"
         style={{
           marginTop: 8,
-          padding: "8px 16px",
+          padding: "14px 28px",
           borderRadius: 999,
           background: "#1d9bf0",
           color: "#fff",
-          fontSize: "0.875rem",
+          fontSize: "1rem",
           fontWeight: 600,
         }}
       >
-        Setup OK \u2014 ready to build
-      </p>
-      <p style={{ marginTop: 24, fontSize: "0.8rem", opacity: 0.5 }}>
+        \u0417\u0430\u043f\u0438\u0441\u0430\u0442\u044c\u0441\u044f
+      </Link>
+      <p style={{ marginTop: 24, fontSize: "0.8rem", opacity: 0.45 }}>
         <a href="/api/health" style={{ textDecoration: "underline" }}>
           /api/health
-        </a>{" "}\u2014 database status
+        </a>
       </p>
     </main>
   );
