@@ -49,12 +49,12 @@ function formatDisplayDate(dateStr: string, locale = "ru-RU"): string {
 }
 
 const statusLabel: Record<SlotStatus, string> = {
-  free: "\u0421\u0432\u043e\u0431\u043e\u0434\u043d\u043e",
-  busy: "\u0417\u0430\u043d\u044f\u0442\u043e",
-  held: "\u0412\u0440\u0435\u043c\u0435\u043d\u043d\u043e \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e",
-  blocked: "\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e",
-  past: "\u041f\u0440\u043e\u0448\u043b\u043e",
-  closed: "\u0412\u044b\u0445\u043e\u0434\u043d\u043e\u0439",
+  free: "Свободно",
+  busy: "Занято",
+  held: "Временно недоступно",
+  blocked: "Недоступно",
+  past: "Прошло",
+  closed: "Выходной",
 };
 
 const statusColor: Record<SlotStatus, string> = {
@@ -68,7 +68,6 @@ const statusColor: Record<SlotStatus, string> = {
 
 export default function BookPage() {
   const [today, setToday] = useState("");
-  const [maxDate, setMaxDate] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [slots, setSlots] = useState<SlotInfo[]>([]);
   const [closed, setClosed] = useState(false);
@@ -86,7 +85,6 @@ export default function BookPage() {
       const data: SlotsResponse = await res.json();
       if (!data.ok) throw new Error(data.error || "Failed to load slots");
       setToday(data.today);
-      setMaxDate(data.maxDate);
       setSelectedDate(data.date);
       setSlots(data.slots);
       setClosed(data.closed);
@@ -99,13 +97,11 @@ export default function BookPage() {
   }, []);
 
   useEffect(() => {
-    // initial load — today
     fetch("/api/slots")
       .then((r) => r.json())
       .then((data: SlotsResponse) => {
         if (data.ok) {
           setToday(data.today);
-          setMaxDate(data.maxDate);
           setSelectedDate(data.date);
           setSlots(data.slots);
           setClosed(data.closed);
@@ -144,7 +140,7 @@ export default function BookPage() {
       });
       const data = await res.json();
       if (!data.ok) {
-        setError(data.error || "\u0421\u043b\u043e\u0442 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d");
+        setError(data.error || "Слот недоступен");
         await loadSlots(selectedDate);
         return;
       }
@@ -171,14 +167,15 @@ export default function BookPage() {
     >
       <header style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <Link href="/" style={{ opacity: 0.6, fontSize: 14 }}>
-          \u2190 \u041d\u0430\u0437\u0430\u0434
+          ← Назад
         </Link>
-        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, flex: 1 }}>\u0417\u0430\u043f\u0438\u0441\u0430\u0442\u044c\u0441\u044f</h1>
+        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, flex: 1 }}>
+          Записаться
+        </h1>
       </header>
 
-      {/* Date picker */}
       <section>
-        <p style={{ fontSize: 13, opacity: 0.6, marginBottom: 8 }}>\u0414\u0430\u0442\u0430</p>
+        <p style={{ fontSize: 13, opacity: 0.6, marginBottom: 8 }}>Дата</p>
         <div
           style={{
             display: "flex",
@@ -237,26 +234,25 @@ export default function BookPage() {
             fontSize: 14,
           }}
         >
-          <strong>\u0421\u043b\u043e\u0442 \u0443\u0434\u0435\u0440\u0436\u0430\u043d 10 \u043c\u0438\u043d</strong>
+          <strong>Слот удержан 10 мин</strong>
           <div style={{ marginTop: 4, opacity: 0.9 }}>
-            {formatDisplayDate(held.date)} \u00b7 {held.time}\u2013
+            {formatDisplayDate(held.date)} · {held.time}–
             {String(Number(held.time.slice(0, 2)) + 1).padStart(2, "0")}:00
           </div>
           <p style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
-            \u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0448\u0430\u0433: \u0430\u0432\u0442\u043e \u2192 \u0443\u0441\u043b\u0443\u0433\u0430 \u2192 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u0435 (\u0441\u043a\u043e\u0440\u043e)
+            Следующий шаг: авто → услуга → подтверждение (скоро)
           </p>
         </div>
       )}
 
-      {/* Slots */}
       <section>
         <p style={{ fontSize: 13, opacity: 0.6, marginBottom: 8 }}>
-          {selectedDate ? formatDisplayDate(selectedDate) : "\u0412\u0440\u0435\u043c\u044f"}
-          {closed && closedName ? ` \u00b7 ${closedName}` : ""}
+          {selectedDate ? formatDisplayDate(selectedDate) : "Время"}
+          {closed && closedName ? ` · ${closedName}` : ""}
         </p>
 
         {loading ? (
-          <p style={{ opacity: 0.5 }}>\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430\u2026</p>
+          <p style={{ opacity: 0.5 }}>Загрузка…</p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {slots.map((slot) => {
@@ -290,7 +286,7 @@ export default function BookPage() {
                   }}
                 >
                   <span style={{ fontWeight: 600, fontSize: 16 }}>
-                    {slot.time}\u2013{slot.endTime}
+                    {slot.time}–{slot.endTime}
                   </span>
                   <span
                     style={{
@@ -298,7 +294,7 @@ export default function BookPage() {
                       color: isMine ? "#4ade80" : statusColor[slot.status],
                     }}
                   >
-                    {isMine ? "\u0412\u044b\u0431\u0440\u0430\u043d\u043e" : statusLabel[slot.status]}
+                    {isMine ? "Выбрано" : statusLabel[slot.status]}
                   </span>
                 </button>
               );

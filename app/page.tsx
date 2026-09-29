@@ -16,7 +16,7 @@ export default function HomePage() {
     >
       <h1 style={{ fontSize: "1.75rem", fontWeight: 700 }}>BT Booking v5</h1>
       <p style={{ opacity: 0.7, maxWidth: 360, lineHeight: 1.5 }}>
-        Online booking for BT Automazg\u0101tava
+        Online booking for BT Automazgatava
       </p>
       <Link
         href="/book"
@@ -30,7 +30,7 @@ export default function HomePage() {
           fontWeight: 600,
         }}
       >
-        \u0417\u0430\u043f\u0438\u0441\u0430\u0442\u044c\u0441\u044f
+        Записаться
       </Link>
       <p style={{ marginTop: 24, fontSize: "0.8rem", opacity: 0.45 }}>
         <a href="/api/health" style={{ textDecoration: "underline" }}>
