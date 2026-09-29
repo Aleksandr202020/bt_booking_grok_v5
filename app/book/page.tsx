@@ -236,8 +236,7 @@ export default function BookPage() {
         >
           <strong>Слот удержан 10 мин</strong>
           <div style={{ marginTop: 4, opacity: 0.9 }}>
-            {formatDisplayDate(held.date)} · {held.time}–
-            {String(Number(held.time.slice(0, 2)) + 1).padStart(2, "0")}:00
+            {formatDisplayDate(held.date)} · {held.time}
           </div>
           <p style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
             Следующий шаг: авто → услуга → подтверждение (скоро)
@@ -286,7 +285,7 @@ export default function BookPage() {
                   }}
                 >
                   <span style={{ fontWeight: 600, fontSize: 16 }}>
-                    {slot.time}–{slot.endTime}
+                    {slot.time}
                   </span>
                   <span
                     style={{
