@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
+import { LogoutButton } from "./components/LogoutButton";
 
 export default async function HomePage() {
   const user = await getSession();
@@ -26,26 +27,43 @@ export default async function HomePage() {
         <p style={{ fontSize: 14, opacity: 0.8 }}>Привет, {user.name}</p>
       ) : null}
 
-      <Link href="/book" style={mainBtn}>
+      <Link
+        href="/book"
+        style={{
+          marginTop: 8,
+          padding: "14px 28px",
+          borderRadius: 999,
+          background: "#1d9bf0",
+          color: "#fff",
+          fontSize: "1rem",
+          fontWeight: 600,
+        }}
+      >
         Записаться
       </Link>
 
-      <div style={{ display: "flex", gap: 16, marginTop: 8, flexWrap: "wrap", justifyContent: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 16,
+          marginTop: 8,
+          flexWrap: "wrap",
+          justifyContent: "center",
+        }}
+      >
         {user ? (
           <>
-            <Link href="/cars" style={link}>
+            <Link href="/cars" style={{ fontSize: 14, color: "#1d9bf0" }}>
               Мои автомобили
             </Link>
-            <form action="/api/auth/logout" method="post">
-              <LogoutButton />
-            </form>
+            <LogoutButton />
           </>
         ) : (
           <>
-            <Link href="/login" style={link}>
+            <Link href="/login" style={{ fontSize: 14, color: "#1d9bf0" }}>
               Вход
             </Link>
-            <Link href="/register" style={link}>
+            <Link href="/register" style={{ fontSize: 14, color: "#1d9bf0" }}>
               Регистрация
             </Link>
           </>
@@ -54,33 +72,3 @@ export default async function HomePage() {
     </main>
   );
 }
-
-function LogoutButton() {
-  return (
-    <button
-      type="button"
-      style={{ ...link, background: "none", border: "none", cursor: "pointer" }}
-      onClick={async () => {
-        await fetch("/api/auth/logout", { method: "POST" });
-        window.location.href = "/";
-      }}
-    >
-      Выйти
-    </button>
-  );
-}
-
-const mainBtn: React.CSSProperties = {
-  marginTop: 8,
-  padding: "14px 28px",
-  borderRadius: 999,
-  background: "#1d9bf0",
-  color: "#fff",
-  fontSize: "1rem",
-  fontWeight: 600,
-};
-
-const link: React.CSSProperties = {
-  fontSize: 14,
-  color: "#1d9bf0",
-};
