@@ -23,9 +23,7 @@ export default async function HomePage() {
         Онлайн-запись на мойку BT Automazgatava
       </p>
 
-      {user ? (
-        <p style={{ fontSize: 14, opacity: 0.8 }}>Привет, {user.name}</p>
-      ) : null}
+      {user ? <p style={{ fontSize: 14, opacity: 0.8 }}>Привет, {user.name}</p> : null}
 
       <Link
         href="/book"
@@ -42,30 +40,17 @@ export default async function HomePage() {
         Записаться
       </Link>
 
-      <div
-        style={{
-          display: "flex",
-          gap: 16,
-          marginTop: 8,
-          flexWrap: "wrap",
-          justifyContent: "center",
-        }}
-      >
+      <div style={{ display: "flex", gap: 16, marginTop: 8, flexWrap: "wrap", justifyContent: "center" }}>
         {user ? (
           <>
-            <Link href="/cars" style={{ fontSize: 14, color: "#1d9bf0" }}>
-              Мои автомобили
-            </Link>
+            <Link href="/cars" style={{ fontSize: 14, color: "#1d9bf0" }}>Мои автомобили</Link>
+            <Link href="/bookings" style={{ fontSize: 14, color: "#1d9bf0" }}>Мои записи</Link>
             <LogoutButton />
           </>
         ) : (
           <>
-            <Link href="/login" style={{ fontSize: 14, color: "#1d9bf0" }}>
-              Вход
-            </Link>
-            <Link href="/register" style={{ fontSize: 14, color: "#1d9bf0" }}>
-              Регистрация
-            </Link>
+            <Link href="/login" style={{ fontSize: 14, color: "#1d9bf0" }}>Вход</Link>
+            <Link href="/register" style={{ fontSize: 14, color: "#1d9bf0" }}>Регистрация</Link>
           </>
         )}
       </div>
