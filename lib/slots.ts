@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/db";
 
-/** Working slots: 09:00 … 20:00 (each 60 min, last ends 21:00) */
 export const SLOT_TIMES = [
   "09:00",
   "10:00",
@@ -22,9 +21,7 @@ export type SlotInfo = {
   time: string;
   endTime: string;
   status: SlotStatus;
-  /** ISO time when hold expires (only for status=held) */
   holdExpiresAt?: string;
-  /** session that holds the slot */
   holdSessionId?: string;
 };
 
@@ -162,13 +159,18 @@ export async function getSlotsForDate(dateStr: string): Promise<{
   return { date: dateStr, closed: false, closedName: null, slots };
 }
 
+/** Hold requires authenticated userId */
 export async function createHold(params: {
   dateStr: string;
   startTime: string;
   sessionId: string;
-  userId?: string;
+  userId: string;
 }): Promise<{ ok: true; expiresAt: string } | { ok: false; error: string }> {
   const { dateStr, startTime, sessionId, userId } = params;
+
+  if (!userId) {
+    return { ok: false, error: "Auth required" };
+  }
 
   if (!SLOT_TIMES.includes(startTime as (typeof SLOT_TIMES)[number])) {
     return { ok: false, error: "Invalid time slot" };
@@ -185,7 +187,7 @@ export async function createHold(params: {
       where: {
         date: parseDateOnly(dateStr),
         startTime,
-        sessionId,
+        userId,
         expiresAt: { gt: new Date() },
       },
     });
@@ -198,6 +200,10 @@ export async function createHold(params: {
   const date = parseDateOnly(dateStr);
   const expiresAt = new Date(Date.now() + HOLD_MINUTES * 60 * 1000);
 
+  // One active hold per user
+  await prisma.slotHold.deleteMany({
+    where: { userId, NOT: { date, startTime } },
+  });
   await prisma.slotHold.deleteMany({
     where: { sessionId, NOT: { date, startTime } },
   });
@@ -213,7 +219,7 @@ export async function createHold(params: {
       },
       update: {
         sessionId,
-        userId: userId ?? null,
+        userId,
         expiresAt,
       },
       create: {
@@ -221,7 +227,7 @@ export async function createHold(params: {
         date,
         startTime,
         sessionId,
-        userId: userId ?? null,
+        userId,
         expiresAt,
       },
     });

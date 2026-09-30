@@ -1,21 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHold, cleanupExpiredHolds } from "@/lib/slots";
+import { getSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-/** POST /api/slots/hold  { date, time, sessionId } */
+/** POST /api/slots/hold — only authenticated users */
 export async function POST(req: NextRequest) {
   try {
+    const user = await getSession();
+    if (!user) {
+      return NextResponse.json(
+        { ok: false, error: "Войдите в аккаунт, чтобы выбрать время", needAuth: true },
+        { status: 401 }
+      );
+    }
+
     await cleanupExpiredHolds();
 
     const body = await req.json();
     const date = body.date as string | undefined;
     const time = body.time as string | undefined;
-    const sessionId = body.sessionId as string | undefined;
+    const sessionId = (body.sessionId as string | undefined) || user.id;
 
-    if (!date || !time || !sessionId) {
+    if (!date || !time) {
       return NextResponse.json(
-        { ok: false, error: "date, time and sessionId are required" },
+        { ok: false, error: "date and time are required" },
         { status: 400 }
       );
     }
@@ -24,6 +33,7 @@ export async function POST(req: NextRequest) {
       dateStr: date,
       startTime: time,
       sessionId,
+      userId: user.id,
     });
 
     if (!result.ok) {
