@@ -143,16 +143,39 @@ export default function BookFlowPage() {
     if (holding) return;
     setHolding(true); setError(null);
     try {
-      const data = await (await fetch("/api/slots/hold", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: selectedDate, time, sessionId: sid() }) })).json();
-      if (!data.ok) { setError(data.error || "Слот недоступен"); await loadSlots(selectedDate); return; }
-      const h = { date: selectedDate, time, expiresAt: data.expiresAt as string };
-      setHeld(h); sessionStorage.setItem(HOLD_KEY, JSON.stringify(h));
-      await loadSlots(selectedDate);
+      // Auth first — no hold without login
       const me = await (await fetch("/api/auth/me")).json();
-      if (me.ok && me.user) await loadCars();
-      else setStep("auth");
-    } catch (e) { setError(e instanceof Error ? e.message : "Error"); }
-    finally { setHolding(false); }
+      if (!me.ok || !me.user) {
+        sessionStorage.setItem("bt_pending_slot", JSON.stringify({ date: selectedDate, time }));
+        setStep("auth");
+        return;
+      }
+      const data = await (await fetch("/api/slots/hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: selectedDate, time, sessionId: sid() }),
+      })).json();
+      if (!data.ok) {
+        if (data.needAuth) {
+          sessionStorage.setItem("bt_pending_slot", JSON.stringify({ date: selectedDate, time }));
+          setStep("auth");
+          return;
+        }
+        setError(data.error || "Слот недоступен");
+        await loadSlots(selectedDate);
+        return;
+      }
+      const h = { date: selectedDate, time, expiresAt: data.expiresAt as string };
+      setHeld(h);
+      sessionStorage.setItem(HOLD_KEY, JSON.stringify(h));
+      sessionStorage.removeItem("bt_pending_slot");
+      await loadSlots(selectedDate);
+      await loadCars();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setHolding(false);
+    }
   }
 
   async function addCar() {
@@ -237,7 +260,10 @@ export default function BookFlowPage() {
       <main style={page}>
         <H title="Вход" onBack={() => setStep("datetime")} />
         {summary}
-        <p style={{ lineHeight: 1.5, opacity: 0.85 }}>Войдите или зарегистрируйтесь. Слот удерживается ещё <strong>{holdLeft || "…"}</strong>.</p>
+        <p style={{ lineHeight: 1.5, opacity: 0.85 }}>
+          Чтобы выбрать время и записаться, войдите или зарегистрируйтесь.
+          Удержание слота (10 мин) начинается только после входа.
+        </p>
         <Link href={`/login?next=${next}`} style={{ ...primary, display: "block", textAlign: "center", textDecoration: "none" }}>Войти</Link>
         <Link href={`/register?next=${next}`} style={{ ...primary, display: "block", textAlign: "center", textDecoration: "none", background: "#38444d" }}>Регистрация</Link>
       </main>
