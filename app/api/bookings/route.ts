@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
-import { endTimeOf, parseDateOnly, SLOT_TIMES } from "@/lib/slots";
+import { endTimeOf, parseDateOnly, SLOT_TIMES, nowInRiga } from "@/lib/slots";
+import { MAX_ACTIVE_BOOKINGS } from "@/lib/limits";
 
 export const dynamic = "force-dynamic";
 
@@ -36,8 +37,48 @@ export async function POST(req: NextRequest) {
 
     const date = parseDateOnly(dateStr);
     const endTime = endTimeOf(startTime);
+    const { dateStr: today } = nowInRiga();
 
-    // Car must belong to user
+    // Client limit: max active future confirmed bookings
+    const activeCount = await prisma.booking.count({
+      where: {
+        userId: user.id,
+        status: "CONFIRMED",
+        OR: [
+          { date: { gt: parseDateOnly(today) } },
+          { date: parseDateOnly(today) },
+        ],
+      },
+    });
+    // Filter past times for today is approximate in count — refine below
+    if (activeCount >= MAX_ACTIVE_BOOKINGS) {
+      // Count only truly future
+      const upcoming = await prisma.booking.findMany({
+        where: {
+          userId: user.id,
+          status: "CONFIRMED",
+          date: { gte: parseDateOnly(today) },
+        },
+        select: { date: true, startTime: true },
+      });
+      const { timeStr } = nowInRiga();
+      const future = upcoming.filter((b) => {
+        const d = b.date.toISOString().slice(0, 10);
+        if (d > today) return true;
+        if (d === today && b.startTime > timeStr) return true;
+        return false;
+      });
+      if (future.length >= MAX_ACTIVE_BOOKINGS) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Максимум ${MAX_ACTIVE_BOOKINGS} активных записей. Отмените одну из существующих.`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const car = await prisma.car.findFirst({
       where: { id: carId, userId: user.id, archived: false },
       include: {
@@ -49,8 +90,6 @@ export async function POST(req: NextRequest) {
     }
 
     const categoryId = car.model.categoryId;
-
-    // Services + prices for this category
     const serviceIds = [mainServiceId, ...extraServiceIds];
     const services = await prisma.service.findMany({
       where: { id: { in: serviceIds }, active: true },
@@ -85,9 +124,7 @@ export async function POST(req: NextRequest) {
       0
     );
 
-    // Atomic: check hold + free slot + create booking + delete hold
     const booking = await prisma.$transaction(async (tx) => {
-      // Valid hold for this session
       const hold = await tx.slotHold.findFirst({
         where: {
           date,
@@ -96,30 +133,20 @@ export async function POST(req: NextRequest) {
           expiresAt: { gt: new Date() },
         },
       });
-      if (!hold) {
-        throw new Error("HOLD_EXPIRED");
-      }
+      if (!hold) throw new Error("HOLD_EXPIRED");
 
-      // Slot free of confirmed bookings
       const existing = await tx.booking.findFirst({
         where: { date, startTime, status: "CONFIRMED" },
       });
-      if (existing) {
-        throw new Error("SLOT_TAKEN");
-      }
+      if (existing) throw new Error("SLOT_TAKEN");
 
-      // Not blocked
       const blocked = await tx.blockedSlot.findFirst({
         where: { date, startTime },
       });
-      if (blocked) {
-        throw new Error("SLOT_BLOCKED");
-      }
+      if (blocked) throw new Error("SLOT_BLOCKED");
 
       const closed = await tx.closedDay.findUnique({ where: { date } });
-      if (closed) {
-        throw new Error("DAY_CLOSED");
-      }
+      if (closed) throw new Error("DAY_CLOSED");
 
       const created = await tx.booking.create({
         data: {
@@ -150,10 +177,7 @@ export async function POST(req: NextRequest) {
         include: { services: true },
       });
 
-      // Release hold for this slot
-      await tx.slotHold.deleteMany({
-        where: { date, startTime },
-      });
+      await tx.slotHold.deleteMany({ where: { date, startTime } });
 
       await tx.auditLog.create({
         data: {
@@ -162,11 +186,7 @@ export async function POST(req: NextRequest) {
           action: "booking.create",
           entityType: "Booking",
           entityId: created.id,
-          meta: {
-            date: dateStr,
-            startTime,
-            totalPriceCents,
-          },
+          meta: { date: dateStr, startTime, totalPriceCents },
         },
       });
 
@@ -205,7 +225,6 @@ export async function POST(req: NextRequest) {
         { status: 409 }
       );
     }
-    // Unique constraint race
     if (msg.includes("Unique constraint") || msg.includes("unique_confirmed_slot")) {
       return NextResponse.json(
         { ok: false, error: "Слот только что заняли" },
