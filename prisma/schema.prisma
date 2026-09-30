@@ -11,8 +11,6 @@ datasource db {
   directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
-// ─── Enums ───
-
 enum UserRole {
   CLIENT
   ADMIN
@@ -24,27 +22,23 @@ enum BookingStatus {
   COMPLETED
 }
 
-// ─── Auth / Users ───
-
 model User {
   id        String   @id @default(cuid())
   name      String
   phone     String   @unique
   email     String?  @unique
-  password  String   // hashed
+  password  String
   role      UserRole @default(CLIENT)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  cars     Car[]
-  bookings Booking[]
-  holds    SlotHold[]
+  cars      Car[]
+  bookings  Booking[]
+  holds     SlotHold[]
   auditLogs AuditLog[]
 
   @@map("users")
 }
-
-// ─── Car catalog ───
 
 model Brand {
   id        String   @id @default(cuid())
@@ -64,7 +58,7 @@ model Brand {
 
 model Category {
   id        String   @id @default(cuid())
-  slug      String   @unique // e.g. light, suv, van, commercial
+  slug      String   @unique
   nameLv    String
   nameRu    String
   nameEn    String
@@ -73,7 +67,7 @@ model Category {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  models       Model[]
+  models        Model[]
   servicePrices ServicePrice[]
 
   @@map("categories")
@@ -96,13 +90,12 @@ model Model {
   @@map("models")
 }
 
-// Client's vehicles
 model Car {
   id        String   @id @default(cuid())
   userId    String
   modelId   String
-  plate     String?  // number plate optional
-  archived  Boolean  @default(false) // soft-delete if used in bookings
+  plate     String?
+  archived  Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -113,8 +106,6 @@ model Car {
   @@map("cars")
 }
 
-// ─── Services & prices ───
-
 model Service {
   id          String   @id @default(cuid())
   slug        String   @unique
@@ -122,7 +113,7 @@ model Service {
   nameRu      String
   nameEn      String
   description String?
-  isExtra     Boolean  @default(false) // additional service
+  isExtra     Boolean  @default(false)
   active      Boolean  @default(true)
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
@@ -138,7 +129,7 @@ model ServicePrice {
   id         String   @id @default(cuid())
   serviceId  String
   categoryId String
-  priceCents Int      // store money as integer cents
+  priceCents Int
   active     Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -150,14 +141,11 @@ model ServicePrice {
   @@map("service_prices")
 }
 
-// ─── Schedule: holds, blocks, holidays ───
-
-/// Temporary 10-minute hold on a slot
 model SlotHold {
   id        String   @id @default(cuid())
-  date      DateTime @db.Date // calendar day Europe/Riga
-  startTime String   // "09:00", "10:00", ...
-  sessionId String   // anonymous session or user id
+  date      DateTime @db.Date
+  startTime String
+  sessionId String
   userId    String?
   expiresAt DateTime
   createdAt DateTime @default(now())
@@ -184,31 +172,27 @@ model BlockedSlot {
 model ClosedDay {
   id        String   @id @default(cuid())
   date      DateTime @db.Date @unique
-  name      String?  // e.g. "Jāņi"
+  name      String?
   createdAt DateTime @default(now())
 
   @@map("closed_days")
 }
-
-// ─── Bookings ───
 
 model Booking {
   id     String        @id @default(cuid())
   userId String
   carId  String
 
-  // Slot
-  date      DateTime @db.Date
-  startTime String   // "14:00"
-  endTime   String   // "15:00"
+  date      DateTime      @db.Date
+  startTime String
+  endTime   String
   status    BookingStatus @default(CONFIRMED)
 
-  // Snapshot at confirmation time (immutable history)
-  carBrandName     String
-  carModelName     String
-  carCategoryName  String
-  carCategorySlug  String
-  totalPriceCents  Int
+  carBrandName    String
+  carModelName    String
+  carCategoryName String
+  carCategorySlug String
+  totalPriceCents Int
 
   notes     String?
   createdAt DateTime @default(now())
@@ -218,23 +202,22 @@ model Booking {
   car      Car              @relation(fields: [carId], references: [id])
   services BookingService[]
 
-  // One confirmed booking per slot
-  @@unique([date, startTime], name: "unique_confirmed_slot")
+  // Partial unique (CONFIRMED only) is applied in SQL: prisma/fix-cancel-slot.sql
+  @@index([date, startTime])
   @@index([userId, date])
   @@index([status, date])
   @@map("bookings")
 }
 
 model BookingService {
-  id               String  @id @default(cuid())
-  bookingId        String
-  serviceId        String?
-  // Snapshot
-  serviceNameLv    String
-  serviceNameRu    String
-  serviceNameEn    String
-  isExtra          Boolean
-  priceCents       Int
+  id            String  @id @default(cuid())
+  bookingId     String
+  serviceId     String?
+  serviceNameLv String
+  serviceNameRu String
+  serviceNameEn String
+  isExtra       Boolean
+  priceCents    Int
 
   booking Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   service Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
@@ -242,12 +225,10 @@ model BookingService {
   @@map("booking_services")
 }
 
-// ─── Audit ───
-
 model AuditLog {
   id         String   @id @default(cuid())
   userId     String?
-  action     String   // booking.create, booking.cancel, admin.override, ...
+  action     String
   entityType String?
   entityId   String?
   meta       Json?
